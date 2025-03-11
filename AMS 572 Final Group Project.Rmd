@@ -13,7 +13,7 @@ output:
 rm(list=ls()) # Clear out the environment and start fresh
 # install.packages("NHANES")
 library(NHANES) # THIS IS TESTED FOR GITHUB
-data("NHANES")
+data("NHANES") # This is for Dev Branch
 head(NHANES)
 ```
 I will now clean the data (get rid of "NA" values and duplicates) and create a histogram to see if it looks normally distributed. A big note is that I will be clearing "NA" values of either Education or Poverty because there are missing values for people under 20 years of age (as indicated in the NHANES package description), which could affect the whole process, and having one column be NA while another column have a value would not provide any meaningful analysis and could potentially complicate the analysis. 
