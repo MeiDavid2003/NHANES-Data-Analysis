@@ -1,0 +1,485 @@
+---
+title: "Test"
+author: "David Mei"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r}
+# Clear list
+rm(list=ls()) # Clear out the environment and start fresh
+# install.packages("NHANES")
+library(NHANES)
+data("NHANES")
+head(NHANES)
+```
+I will now clean the data (get rid of "NA" values and duplicates) and create a histogram to see if it looks normally distributed. A big note is that I will be clearing "NA" values of either Education or Poverty because there are missing values for people under 20 years of age (as indicated in the NHANES package description), which could affect the whole process, and having one column be NA while another column have a value would not provide any meaningful analysis and could potentially complicate the analysis. 
+
+I will be focusing on the Education column (independent variable) and the Poverty column (dependent variable)
+The hypothesis test will be... 
+Ho: The medians of the poverty level are the same across all education levels
+VERSUS 
+Ha: At least one education level has a significantly different median of the poverty level
+
+I also want to note which education level has the highest affect on the poverty index. 
+```{r}
+NHANES <- subset(NHANES, !duplicated(NHANES$ID))
+cleaned_data <- NHANES[!is.na(NHANES$Education) & !is.na(NHANES$Poverty), ] # removed rows that contain NA under Education or Poverty columns to avoid including bad information such as children who haven't had education yet
+
+summary(cleaned_data$Education)
+summary(cleaned_data$Poverty)
+```
+
+```{r}
+model <- lm(Poverty ~ Education, data = cleaned_data)
+hist(model$residuals) # Histogram of residuals
+```
+The histogram does not appear to look normally distributed, but it doesn't seem to deviate from normal distribution by a lot. I will now try to do the Q-Q plot to verify normality. 
+```{r}
+qqnorm(model$residuals) # Q-Q plot to visualize normality
+qqline(model$residuals)
+```
+From the looks of it, the residuals does not seem to normally distribute. BUT, it doesn't seem to be an extreme deviation (it appears to relatively follow a normal distribution until the end tails break off). I will do the Shapiro-Wilk test to officially confirm.
+```{r}
+# Ho: The residual follows a normal distribution vs. Ha: The residual does not follow a normal distribution
+shapiro.test(model$residuals)
+```
+A p-value of less than 0.05 indicates to reject the null hypothesis in favor of the alternative. The residual does not follow a normal distribution. 
+
+I am going to test to see if the residuals follow the constant variance assumption (homoscedastic).
+```{r}
+plot(model$fitted.values, model$residuals, 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     main = "Residuals vs. Fitted Values",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+The Residuals vs. Fitted Values plot shows that the residuals are heteroscedastic (unequal variances) because of the difference of the spreads. This would fail the assumption of constant variances. I will use Levene's test to verify that the constant variance assumption fails. The purpose of Levene's test is to test for equal variances between two or more groups (perfect for what I'm doing) and it does not require normality of residuals (but it assumes independence of observations), which is perfect since the residuals are not normally distributed. 
+```{r}
+# Ho: The residuals have constant variance (homoscedasticity) vs. Ha: The residuals don't have constant variance (heteroscedasticity)
+library(car)
+leveneTest(Poverty ~ Education, data = cleaned_data)
+```
+The Levene Test gives a p-value of 2.2e-16 < 0.05, thus we reject the null hypothesis and conclude that the residuals do not have constant variance (AKA heteroscedasticity).
+
+The next step is to use the Box-Cox transformation to (attempt to) stabilize the variance. 
+```{r}
+library(MASS)
+model <- lm(Poverty ~ Education, data = cleaned_data) # Fit the original linear model
+
+summary(cleaned_data$Poverty) # The box-cox transformation cannot be used if there is a value less than or equal to 0, so I have to shift the poverty values up by 1. 
+cleaned_data$Poverty_shifted <- cleaned_data$Poverty + 1
+
+model_shifted <- lm(Poverty_shifted ~ Education, data = cleaned_data)
+boxcox_results <- boxcox(model_shifted, lambda = seq(-2, 2, 0.1))
+```
+The graph shows the best lambda would be around 0.6
+```{r}
+# Find the best lambda value
+best_lambda <- boxcox_results$x[which.max(boxcox_results$y)]
+print(best_lambda) # Best lambda is 0.585858 (around 0.6)
+# Apply the transformation based on the best lambda
+if (round(best_lambda, 2) == 0) {
+  cleaned_data$Poverty_transformed <- log(cleaned_data$Poverty_shifted) # If lambda = 0, do log transformation
+} else {
+  cleaned_data$Poverty_transformed <- cleaned_data$Poverty_shifted^best_lambda # If lambda =/= 0, do the power transformation by the best_lambda
+}
+
+summary(cleaned_data$Poverty_transformed) 
+```
+The summary shows that the transformation has been successful. Previously, I've been getting problems that the transformation made every single data value a constant (every single summary value gave the same number). Thankfully it didn't happen this time. 
+```{r}
+# Fit the model with the transformed poverty values
+transformed_model <- lm(Poverty_transformed ~ Education, data = cleaned_data)
+summary(transformed_model)
+```
+The p-value < 0.05, so this does not seem to be a good transformation. Let's check for homoscedasticity and normality. 
+```{r}
+# Plot of residuals vs fitted values for homoscedasticity
+plot(transformed_model$fitted.values, transformed_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+The Residuals vs. Fitted Values plot shows that the transformed residuals are heteroscedastic (unequal variances) because of the difference of the spreads. This would fail the assumption of constant variances. 
+```{r}
+# Q-Q plot for normality of residuals
+qqnorm(transformed_model$residuals)
+qqline(transformed_model$residuals)
+```
+```{r}
+shapiro.test(transformed_model$residuals) # Shapiro-Wilk normality test on the transformed model
+```
+A p-value of less than 0.05 indicates to reject the null hypothesis in favor of the alternative. The transformed residual does not follow a normal distribution. 
+```{r}
+# Levene's test on the transformed data for homoscedasticity
+leveneTest(Poverty_transformed ~ Education, data = cleaned_data)
+```
+The p-value < 5% significance level. The transformation through the best lambda does not work. 
+
+TRYING OTHER TRANSFORMATIONS!!!!!
+(Log transformation)
+```{r}
+cleaned_data$Poverty_log <- log(cleaned_data$Poverty_shifted)
+log_model <- lm(Poverty_log ~ Education, data = cleaned_data)
+plot(log_model$fitted.values, log_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values (Log Transformation)",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+The Residuals vs. Fitted Values plot shows that the transformed residuals are heteroscedastic (unequal variances) because of the difference of the spreads. This would fail the assumption of constant variances. 
+```{r}
+qqnorm(log_model$residuals)
+qqline(log_model$residuals)
+```
+
+```{r}
+shapiro.test(log_model$residuals)
+```
+Shapiro-Wilks test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not normally distributed.
+```{r}
+leveneTest(Poverty_log ~ Education, data = cleaned_data)
+```
+The p-value < 5% significance level. The log transformation does not work. 
+
+(Square root transformation)
+```{r}
+cleaned_data$Poverty_sqrt <- sqrt(cleaned_data$Poverty_shifted)
+
+# Fit the model
+sqrt_model <- lm(Poverty_sqrt ~ Education, data = cleaned_data)
+
+# Creating the Residuals vs Fitted Values plot
+plot(sqrt_model$fitted.values, sqrt_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values (Square-Root Transformation)",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+
+```{r}
+# Q-Q plot for normality
+qqnorm(sqrt_model$residuals)
+qqline(sqrt_model$residuals)
+```
+
+```{r}
+# Shapiro-Wilk test for normality
+shapiro.test(sqrt_model$residuals)
+```
+Shapiro-Wilks test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not normally distributed.
+```{r}
+leveneTest(Poverty_sqrt ~ Education, data = cleaned_data)
+```
+The p-value < 5% significance level. The square root transformation does not work.
+
+(Reciprocal Transformation)
+```{r}
+cleaned_data$Poverty_reciprocal <- 1 / cleaned_data$Poverty_shifted
+
+# Fit the model
+reciprocal_model <- lm(Poverty_reciprocal ~ Education, data = cleaned_data)
+
+# Residual plots
+plot(reciprocal_model$fitted.values, reciprocal_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values (Reciprocal Transformation)",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+
+```{r}
+# Q-Q plot for normality
+qqnorm(reciprocal_model$residuals)
+qqline(reciprocal_model$residuals)
+```
+
+```{r}
+# Shapiro-Wilk test for normality
+shapiro.test(reciprocal_model$residuals)
+```
+Shapiro-Wilks test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not normally distributed.
+```{r}
+leveneTest(Poverty_reciprocal ~ Education, data = cleaned_data)
+```
+The p-value < 5% significance level. The reciprocal transformation does not work.
+
+
+I've tried using other transformations (such as raising to the 3/2, raising to the 5th power, etc.) to no avail. I will have to do non-parametric tests such as the Kruskal-Wallis test. 
+```{r}
+# Doing the Kruskal-Wallis test
+kruskal_test <- kruskal.test(Poverty ~ Education, data = cleaned_data)
+print(kruskal_test)
+```
+The Kruskal-Wallis test gives a p-value way less than the significance level of 0.05. This causes us to reject the original null hypothesis presented which states that the medians of the Poverty values are the same across all Education groups in favor of the alternative hypothesis that at least one group's median is significantly different from the others. I will do pairwise comparisons using the Wilcoxon rank sum test to see which specific groups are different. This will be using the Bonferroni because of the nonparametric pairwise tests. 
+```{r}
+# Pairwise comparisons with Wilcoxon tests (adjusting for multiple comparisons)
+pairwise.wilcox.test(cleaned_data$Poverty, cleaned_data$Education, p.adjust.method = "bonferroni")
+```
+It seems that pairwise comparisons between all different types of groups show statistically significant differences between education levels. This means every education group was significantly different from the others in terms of the poverty index.
+```{r}
+aggregate(Poverty ~ Education, data = cleaned_data, median)
+```
+This shows a trend that as the education level increases, the median poverty index also increases. Individuals with higher education have a higher median poverty index (thus less poverty). NOTE: from "Some College" to "College Grad" has the largest leap compared to the other education levels. Thus, we can also conclude that "College Grad" education has the biggest impact on poverty index. 
+```{r}
+# Adjusting the plot margins for horizontal labels because the last label, College Grad, got cut off 
+par(mar = c(6, 4, 4, 2)) # To increase margins
+
+# Actual boxplot
+boxplot(Poverty ~ Education, data = cleaned_data,
+        col = c("red", "orange", "yellow", "green", "lightblue"),
+        main = "Poverty by Education Level",
+        xlab = "Education Level",
+        ylab = "Poverty Index",
+        las = 1, cex.axis = 0.9)
+```
+The box plot also reiterates the conclusion given by the Kruskal-Wallis rank sum test that every education group was significantly different from the others in terms of the poverty index. The box plot visually shows the extent of the difference. College grad's median is 4.950, which is why you can't really see the upper bound clearly. 
+
+
+Now, I will address the missing values part of the project. 
+```{r}
+rm(list = ls()) # Clear the environment
+
+data("NHANES")
+
+# Remove duplicate entries 
+NHANES <- subset(NHANES, !duplicated(NHANES$ID))
+
+# Impute missing Education values through finding the most common education level
+library(dplyr)
+
+# Find the mode of the Education column
+mode_education <- NHANES %>%
+  filter(!is.na(Education)) %>%
+  group_by(Education) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count)) %>%
+  slice(1) %>%
+  pull(Education)
+
+# Replace the missing values 
+NHANES$Education[is.na(NHANES$Education)] <- mode_education
+
+# Remove rows with missing values in the Poverty column because I am just focusing on imputing missing values in the Education column
+cleaned_data <- NHANES[!is.na(NHANES$Poverty), ]
+
+summary(cleaned_data$Education)
+```
+"Some College" was the most common education level, so we will use that in place of the missing values. Everything else will stay consistent. 
+
+The hypothesis test will be... 
+Ho: The medians of the poverty level are the same across all education levels
+VERSUS 
+Ha: At least one education level has a significantly different median of the poverty level
+
+```{r}
+model <- lm(Poverty ~ Education, data = cleaned_data)
+hist(model$residuals) # Histogram of residuals
+```
+The histogram does not appear to look normally distributed. I will now try to do the Q-Q plot to verify normality. 
+```{r}
+qqnorm(model$residuals) # Q-Q plot to visualize normality
+qqline(model$residuals)
+```
+The Q-Q plot does not seem to show normally distributed residuals. It is a bit more obvious this time compared to last time. I will have to use Shapiro-Wilk test, but the sample size is over 5000, so I will have to use the Anderson-Darling test as a substitute for it.  
+```{r}
+# Ho: The residual follows a normal distribution vs. Ha: The residual does not follow a normal distribution
+library(nortest)
+ad.test(model$residuals)
+```
+The Anderson-Darling normality test gives a p-value less than the 5% significance level, so the residual does not follow a normal distribution. I will now check for constant variance assumption (homoscedasticity). 
+```{r}
+plot(model$fitted.values, model$residuals, 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     main = "Residuals vs. Fitted Values",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+The Residuals vs. Fitted Values plot shows that the residuals are heteroscedastic (unequal variances) because of the difference of the spreads. This would fail the assumption of constant variances. I will use Levene's test to verify that the constant variance assumption fails. 
+```{r}
+# Ho: The residuals have constant variance (homoscedasticity) vs. Ha: The residuals don't have constant variance (heteroscedasticity)
+leveneTest(Poverty ~ Education, data = cleaned_data)
+```
+Levene's test shows a p-value less than the 5% significance level, so the residuals are heteroscedastic. Like last time, we will show transformations using the best lambda, the log transformation, square root transformation, and reciprocal transformation. 
+```{r}
+library(MASS)
+model <- lm(Poverty ~ Education, data = cleaned_data) # Fit the original linear model
+
+summary(cleaned_data$Poverty) # The box-cox transformation cannot be used if there is a value less than or equal to 0, so I have to shift the poverty values up by 1. 
+cleaned_data$Poverty_shifted <- cleaned_data$Poverty + 1
+
+model_shifted <- lm(Poverty_shifted ~ Education, data = cleaned_data)
+boxcox_results <- boxcox(model_shifted, lambda = seq(-2, 2, 0.1))
+```
+```{r}
+# Find the best lambda value
+best_lambda <- boxcox_results$x[which.max(boxcox_results$y)]
+print(best_lambda) # Best lambda is 0.4242424 (around 0.4)
+# Apply the transformation based on the best lambda
+if (round(best_lambda, 2) == 0) {
+  cleaned_data$Poverty_transformed <- log(cleaned_data$Poverty_shifted) # If lambda = 0, do log transformation
+} else {
+  cleaned_data$Poverty_transformed <- cleaned_data$Poverty_shifted^best_lambda # If lambda =/= 0, do the power transformation by the best_lambda
+}
+
+summary(cleaned_data$Poverty_transformed) 
+```
+```{r}
+# Fit the model with the transformed poverty values
+transformed_model <- lm(Poverty_transformed ~ Education, data = cleaned_data)
+summary(transformed_model)
+```
+The p-value < 0.05, so this does not seem to be a good transformation. Let's check for homoscedasticity and normality. 
+```{r}
+# Plot of residuals vs fitted values for homoscedasticity
+plot(transformed_model$fitted.values, transformed_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+The Residuals vs. Fitted Values plot shows that the transformed residuals are heteroscedastic (unequal variances) because of the difference of the spreads. This would fail the assumption of constant variances. 
+```{r}
+# Q-Q plot for normality of residuals
+qqnorm(transformed_model$residuals)
+qqline(transformed_model$residuals)
+```
+```{r}
+ad.test(transformed_model$residuals) # Anderson-Darling normality test on the transformed model (sample size over 5000, so I cannot do the Shapiro-Wilk test)
+```
+The Anderson-Darling test gives a p-value less than the 5% significance level, so the transformed residuals are not normally distributed. 
+```{r}
+# Levene's test on the transformed data for homoscedasticity
+leveneTest(Poverty_transformed ~ Education, data = cleaned_data)
+```
+Levene's test shows a p-value less than the 5% significance level, so the residuals appear to be heteroscedastic. 
+
+Let's try other transformations like the Log Transformation
+```{r}
+cleaned_data$Poverty_log <- log(cleaned_data$Poverty_shifted)
+log_model <- lm(Poverty_log ~ Education, data = cleaned_data)
+plot(log_model$fitted.values, log_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values (Log Transformation)",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+The Residuals vs. Fitted Values plot shows that the transformed residuals are heteroscedastic (unequal variances) because of the difference of the spreads. This would fail the assumption of constant variances. 
+```{r}
+qqnorm(log_model$residuals)
+qqline(log_model$residuals)
+```
+
+```{r}
+ad.test(log_model$residuals)
+```
+Anderson-Darling test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not normally distributed.
+```{r}
+leveneTest(Poverty_log ~ Education, data = cleaned_data)
+```
+Levene's test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not homoscedastic. 
+
+Let's try Square Root transformation
+```{r}
+cleaned_data$Poverty_sqrt <- sqrt(cleaned_data$Poverty_shifted)
+
+# Fit the model
+sqrt_model <- lm(Poverty_sqrt ~ Education, data = cleaned_data)
+
+# Creating the Residuals vs Fitted Values plot
+plot(sqrt_model$fitted.values, sqrt_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values (Square-Root Transformation)",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+
+```{r}
+# Q-Q plot for normality
+qqnorm(sqrt_model$residuals)
+qqline(sqrt_model$residuals)
+```
+
+```{r}
+# Anderson-Darling test for normality
+ad.test(sqrt_model$residuals)
+```
+Anderson-Darling test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not normally distributed.
+```{r}
+leveneTest(Poverty_sqrt ~ Education, data = cleaned_data)
+```
+The p-value < 5% significance level. The square root transformation does not work.
+
+Let's finally try the Reciprocal transformation. 
+```{r}
+cleaned_data$Poverty_reciprocal <- 1 / cleaned_data$Poverty_shifted
+
+# Fit the model
+reciprocal_model <- lm(Poverty_reciprocal ~ Education, data = cleaned_data)
+
+# Residual plots
+plot(reciprocal_model$fitted.values, reciprocal_model$residuals,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values (Reciprocal Transformation)",
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lty = 2)
+```
+
+```{r}
+# Q-Q plot for normality
+qqnorm(reciprocal_model$residuals)
+qqline(reciprocal_model$residuals)
+```
+
+```{r}
+# Anderson-Darling test for normality
+ad.test(reciprocal_model$residuals)
+```
+Anderson-Darling test has a p-value < 0.05, so we reject the null hypothesis in favor of the alternative that the transformed residuals are not normally distributed.
+```{r}
+leveneTest(Poverty_reciprocal ~ Education, data = cleaned_data)
+```
+The p-value < 5% significance level. The reciprocal transformation does not work.
+
+Transformations, like last time, do not seem to work on the residuals effectively. I will have to try non-parametric tests such as the Kruskal-Wallis test. 
+```{r}
+# Doing the Kruskal-Wallis test
+kruskal_test <- kruskal.test(Poverty ~ Education, data = cleaned_data)
+print(kruskal_test)
+```
+The Kruskal-Wallis test gives a p-value way less than the significance level of 0.05. This causes us to reject the original null hypothesis presented which states that the medians of the Poverty values are the same across all Education groups in favor of the alternative hypothesis that at least one group's median is significantly different from the others. I will do pairwise comparisons using the Wilcoxon rank sum test to see which specific groups are different. This will be using the Bonferroni because of the nonparametric pairwise tests. 
+```{r}
+# Pairwise comparisons with Wilcoxon tests (adjusting for multiple comparisons)
+pairwise.wilcox.test(cleaned_data$Poverty, cleaned_data$Education, p.adjust.method = "bonferroni")
+```
+It seems that pairwise comparisons between all different types of groups show statistically significant differences between education levels EXCEPT FOR High School versus Some College (their p-value > 5% significance level). This means every education group was significantly different from the others in terms of the poverty index except for that specific group I mentioned.
+```{r}
+aggregate(Poverty ~ Education, data = cleaned_data, median)
+```
+This shows a trend that as the education level increases, the median poverty index also increases. Individuals with higher education have a higher median poverty index (thus less poverty). NOTE: from "Some College" to "College Grad" has the largest leap compared to the other education levels. Thus, we can also conclude that "College Grad" education has the biggest impact on poverty index. 
+```{r}
+# Adjusting the plot margins for horizontal labels because the last label, College Grad, got cut off 
+par(mar = c(6, 4, 4, 2)) # To increase margins
+
+# Actual boxplot
+boxplot(Poverty ~ Education, data = cleaned_data,
+        col = c("red", "orange", "yellow", "green", "lightblue"),
+        main = "Poverty by Education Level",
+        xlab = "Education Level",
+        ylab = "Poverty Index",
+        las = 1, cex.axis = 0.9)
+```
+Unlike last time, the leap from High School to Some College is the smallest. According to the Wilcoxon Rank Sum Test, there does not seem to be much difference between those two education levels. The Some College and College Grad education levels, like last time, have the highest leap. 
+
+
+
+
+
+
