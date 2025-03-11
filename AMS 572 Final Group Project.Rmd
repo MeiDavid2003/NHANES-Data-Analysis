@@ -12,7 +12,7 @@ output:
 # Clear list
 rm(list=ls()) # Clear out the environment and start fresh
 # install.packages("NHANES")
-library(NHANES) # CHanges
+library(NHANES) # Testing Changes
 data("NHANES")
 head(NHANES)
 ```
